@@ -34,6 +34,9 @@ class CacheIntegrationTest extends AbstractIntegrationTest {
     @Autowired
     SnipMetrics metrics;
 
+    @Autowired
+    dev.snip.cache.ShortCodeBloomFilter bloom;
+
     private String key() {
         return "snip_test_" + UUID.randomUUID();
     }
@@ -79,6 +82,7 @@ class CacheIntegrationTest extends AbstractIntegrationTest {
         String bogus = "nope" + Integer.toHexString(new java.util.Random().nextInt(1 << 20));
         String cacheKey = "snip:link:" + bogus;
         redis.delete(cacheKey);
+        bloom.add(bogus); // Force the Bloom filter to allow this code through so we can test negative caching
 
         assertThat(resolver.resolve(bogus)).isEmpty();
 
