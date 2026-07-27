@@ -1,5 +1,7 @@
 # Snip — Distributed URL Shortener
 
+[![CI](https://github.com/ggsonly-ops/snip-URL-shortner/actions/workflows/ci.yml/badge.svg)](https://github.com/ggsonly-ops/snip-URL-shortner/actions/workflows/ci.yml)
+
 Snip is a high-performance, distributed URL shortener built to demonstrate scalable engineering patterns. It features Snowflake IDs, cache-aside with stampede protection, atomic Redis rate limiting, and asynchronous click analytics.
 
 ## 🚀 Quick Start
@@ -16,6 +18,8 @@ docker compose -f docker-compose.yml -f docker-compose.scale.yml up -d --build
 ```
 The frontend will be available at `http://localhost:8090`.
 Grafana (for metrics) will be at `http://localhost:3002` (admin/admin).
+
+![Frontend Homepage](docs/homepage.png)
 
 ## 📊 Performance & Load Testing
 
@@ -36,6 +40,8 @@ The system is designed to handle thousands of requests per second. Real load tes
 ```bash
 ./loadtest/run-matrix.sh
 ```
+
+![Grafana Dashboard Load Test](docs/grafana.png)
 
 ## 🏗 Architecture
 
