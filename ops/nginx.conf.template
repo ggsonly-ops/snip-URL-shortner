@@ -1,0 +1,113 @@
+# Rendered by the nginx image's envsubst step. SNIP_UPSTREAM (below) is the only
+# variable, so one file serves both the 1-instance and 3-instance topologies.
+#
+# Do not write the variable in ${...} form anywhere else in this file, including in
+# comments: envsubst substitutes every occurrence, so a mention in a comment injects
+# the server list outside the upstream block and nginx refuses to start.
+
+upstream snip_backend {
+    # least_conn over round-robin.
+    #
+    # Round-robin assumes every request costs the same. Here a cache hit is ~5ms and a
+    # cache miss ~50ms, so under round-robin the instance that happened to draw several
+    # misses keeps receiving new work at the same rate and drifts behind. least_conn
+    # routes to whoever currently has the fewest in-flight connections, which is
+    # self-correcting.
+    #
+    # The other two worth knowing: ip_hash gives sticky sessions, needed only if the app
+    # holds per-user state - this one deliberately does not; and weighted round-robin,
+    # for a fleet of unequal instance sizes.
+    least_conn;
+
+    ${SNIP_UPSTREAM}
+
+    # Reuse upstream TCP connections instead of a three-way handshake per request.
+    # Worth real throughput once you are into the thousands of requests per second.
+    keepalive 32;
+}
+
+# Rate limiting also exists in the application (token bucket in Redis, shared across
+# instances). This zone is a coarse second line that sheds obviously abusive traffic
+# before it costs an upstream connection at all.
+#
+# It is per source IP, which matters for load testing: every request from k6 arrives
+# from a single container IP, so at the default 200r/s a load test measures this
+# directive and nothing else. run-matrix.sh raises SNIP_EDGE_RATE accordingly.
+limit_req_zone $binary_remote_addr zone=snip_edge:10m rate=$SNIP_EDGE_RATE;
+
+server {
+    listen 80;
+    server_name _;
+
+    # Nginx would otherwise cap uploads at 1m and the API at its default buffers.
+    client_max_body_size 16k;
+    client_body_timeout 5s;
+
+    # Real client addresses reach the app through these. The app only trusts
+    # X-Forwarded-For when the peer is inside a configured proxy CIDR, because clients
+    # can forge the header.
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+
+    proxy_connect_timeout 2s;
+    proxy_read_timeout    5s;
+    proxy_send_timeout    5s;
+    # Retry another instance if one is down or unhealthy. non_idempotent is deliberately
+    # absent: replaying a POST that may already have created a link would be worse than
+    # the error.
+    proxy_next_upstream error timeout http_502 http_503 http_504;
+    proxy_next_upstream_tries 2;
+
+    gzip on;
+    gzip_types application/json text/css application/javascript image/svg+xml;
+    gzip_min_length 512;
+
+    # --- single-page app -----------------------------------------------------
+    # The SPA owns "/" exactly plus its own /app/* routes; every other single path
+    # segment is a short code and belongs to the backend.
+
+    location = / {
+        root /usr/share/nginx/html;
+        try_files /index.html =404;
+    }
+
+    location /assets/ {
+        root /usr/share/nginx/html;
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+
+    location /app/ {
+        root /usr/share/nginx/html;
+        try_files /index.html =404;
+    }
+
+    location = /favicon.svg {
+        root /usr/share/nginx/html;
+        expires 7d;
+    }
+
+    # --- api and monitoring --------------------------------------------------
+
+    location /api/ {
+        limit_req zone=snip_edge burst=$SNIP_EDGE_BURST nodelay;
+        proxy_pass http://snip_backend;
+    }
+
+    location /actuator/ {
+        # Not exposed publicly in a real deployment; open here so Prometheus and the
+        # demo can reach it through the same port.
+        proxy_pass http://snip_backend;
+    }
+
+    # --- redirects: everything else ------------------------------------------
+
+    location / {
+        limit_req zone=snip_edge burst=$SNIP_EDGE_BURST nodelay;
+        proxy_pass http://snip_backend;
+    }
+}

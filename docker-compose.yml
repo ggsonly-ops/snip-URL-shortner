@@ -1,0 +1,147 @@
+# Snip - single-instance stack.
+#
+#   docker compose up -d --build                       1 app instance
+#   docker compose -f docker-compose.yml -f docker-compose.scale.yml up -d --build
+#                                                      3 app instances behind Nginx
+#
+# Everything is reachable through Nginx on :80. Grafana is on :3001, Prometheus :9090.
+
+name: snip
+
+x-app-base: &app-base
+  build:
+    context: .
+    dockerfile: Dockerfile
+  environment: &app-env
+    SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/snip
+    SPRING_DATASOURCE_USERNAME: snip
+    SPRING_DATASOURCE_PASSWORD: snip
+    SPRING_DATA_REDIS_HOST: redis
+    SPRING_DATA_REDIS_PORT: "6379"
+    APP_BASE_URL: ${APP_BASE_URL:-http://localhost}
+    APP_CACHE_ENABLED: ${APP_CACHE_ENABLED:-true}
+    APP_RATE_LIMIT_ENABLED: ${APP_RATE_LIMIT_ENABLED:-true}
+    APP_BLOOM_ENABLED: ${APP_BLOOM_ENABLED:-true}
+    APP_ANALYTICS_ENABLED: ${APP_ANALYTICS_ENABLED:-true}
+    APP_GEOIP_DEMO: ${APP_GEOIP_DEMO:-false}
+    APP_DB_POOL_SIZE: ${APP_DB_POOL_SIZE:-20}
+    # Rate limits. The defaults are sized for humans: 600 redirects/min and 100
+    # writes/min per identity. A load test drives thousands of requests per second
+    # from one or two source IPs, so run-matrix.sh raises these - otherwise the test
+    # measures the rate limiter rather than the service. Seeding raises the write
+    # limit for the same reason.
+    APP_REDIRECT_CAPACITY: ${APP_REDIRECT_CAPACITY:-600}
+    APP_REDIRECT_REFILL: ${APP_REDIRECT_REFILL:-600}
+    APP_AUTH_CAPACITY: ${APP_AUTH_CAPACITY:-100}
+    APP_AUTH_REFILL: ${APP_AUTH_REFILL:-100}
+    APP_ANON_CAPACITY: ${APP_ANON_CAPACITY:-20}
+    APP_ANON_REFILL: ${APP_ANON_REFILL:-20}
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: snip
+      POSTGRES_USER: snip
+      POSTGRES_PASSWORD: snip
+    ports: ["${SNIP_DB_PORT:-5432}:5432"]
+    command: >
+      postgres -c max_connections=200
+               -c shared_buffers=256MB
+               -c effective_cache_size=768MB
+               -c work_mem=8MB
+               -c random_page_cost=1.1
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U snip -d snip"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports: ["${SNIP_REDIS_PORT:-6379}:6379"]
+    # --maxmemory-policy allkeys-lru: at the memory cap, evict the least recently used
+    #   key instead of erroring. Correct for a cache, because link traffic is heavily
+    #   power-law distributed and LRU keeps exactly the hot links resident. `noeviction`
+    #   would be right for a queue or a lock store, where losing data silently is a bug.
+    # --appendonly no: no disk persistence. This is a cache; every entry is rebuildable
+    #   from Postgres, so paying write throughput for durability we do not need is a
+    #   straight loss. (The click stream lives here too and is the one thing that would
+    #   be lost - an accepted trade, documented in the README.)
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app1:
+    <<: *app-base
+    environment:
+      <<: *app-env
+      APP_MACHINE_ID: "1"
+    ports: ["${SNIP_APP1_PORT:-8080}:8080"]
+
+  nginx:
+    build:
+      context: .
+      dockerfile: ops/Dockerfile.web
+    ports: ["${SNIP_HTTP_PORT:-80}:80"]
+    environment:
+      # Injected into the upstream block by the official image's envsubst step, so one
+      # config file serves both the 1-instance and 3-instance topologies.
+      SNIP_UPSTREAM: ${SNIP_UPSTREAM:-server app1:8080 max_fails=3 fail_timeout=30s;}
+      # Coarse per-source-IP shed in front of the application's own token bucket.
+      SNIP_EDGE_RATE: ${SNIP_EDGE_RATE:-200r/s}
+      SNIP_EDGE_BURST: ${SNIP_EDGE_BURST:-200}
+    depends_on: [app1]
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports: ["${SNIP_PROMETHEUS_PORT:-9090}:9090"]
+    volumes:
+      - ./ops/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    ports: ["${SNIP_GRAFANA_PORT:-3001}:3000"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_DEFAULT_THEME: dark
+    volumes:
+      - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./ops/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on: [prometheus]
+    restart: unless-stopped
+
+  # Load generator. Not started by default - it lives behind a profile so `up` does not
+  # begin hammering the stack.
+  #   docker compose --profile loadtest run --rm k6 run /scripts/redirect.js
+  k6:
+    image: grafana/k6:latest
+    profiles: ["loadtest"]
+    environment:
+      BASE_URL: http://nginx
+      K6_SUMMARY_TREND_STATS: "avg,min,med,p(90),p(95),p(99),max"
+    volumes:
+      - ./loadtest:/scripts
+      - ./results:/results
+    entrypoint: ["k6"]
+
+volumes:
+  pgdata:

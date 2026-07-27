@@ -1,0 +1,24 @@
+target/
+!.mvn/wrapper/maven-wrapper.jar
+.mvn/timing.properties
+
+# frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# load test artefacts
+loadtest/codes.json
+results/*.json
+results/*.txt
+!results/.gitkeep
+
+# local config
+.env
+*.mmdb
+
+# editors / os
+.idea/
+*.iml
+.vscode/
+.DS_Store

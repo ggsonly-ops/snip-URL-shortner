@@ -1,0 +1,152 @@
+spring:
+  application:
+    name: snip
+
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/snip}
+    username: ${SPRING_DATASOURCE_USERNAME:snip}
+    password: ${SPRING_DATASOURCE_PASSWORD:snip}
+    hikari:
+      pool-name: snip-pool
+      # 3 instances x 20 = 60 connections against Postgres. Postgres backends are a
+      # process each and several MB, so this is the number that actually caps horizontal
+      # scaling - see the README's "where this stops scaling".
+      maximum-pool-size: ${APP_DB_POOL_SIZE:20}
+      minimum-idle: 5
+      connection-timeout: 3000
+      max-lifetime: 1800000
+      leak-detection-threshold: 20000
+
+  jpa:
+    open-in-view: false          # no lazy loading in the view layer; keeps connections short
+    hibernate:
+      ddl-auto: validate         # Flyway owns the schema, Hibernate only checks it
+    properties:
+      hibernate:
+        jdbc.batch_size: 50
+        order_inserts: true
+        order_updates: true
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:localhost}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
+      # Short, deliberately. If Redis is slow the whole point is to give up quickly and
+      # fall through to Postgres, not to add its latency to ours.
+      timeout: 500ms
+      connect-timeout: 500ms
+      lettuce:
+        pool:
+          enabled: true
+          max-active: 32
+          max-idle: 16
+          min-idle: 4
+          max-wait: 200ms
+
+  threads:
+    virtual:
+      # Java 21 virtual threads. Off by default so the load-test baseline is a
+      # conventional thread-per-request server; flip it to compare.
+      enabled: ${APP_VIRTUAL_THREADS:false}
+
+server:
+  port: ${SERVER_PORT:8080}
+  tomcat:
+    threads:
+      max: 200
+      min-spare: 20
+    accept-count: 200
+  compression:
+    enabled: true
+    mime-types: application/json,text/html,text/css,application/javascript
+  error:
+    whitelabel:
+      enabled: false
+
+app:
+  base-url: ${APP_BASE_URL:http://localhost:8080}
+  # -1 = derive from hostname. Compose sets this explicitly per instance.
+  machine-id: ${APP_MACHINE_ID:-1}
+
+  cache:
+    enabled: ${APP_CACHE_ENABLED:true}
+    ttl: 24h
+    negative-ttl: 5m
+    lock-ttl: 3s
+    lock-backoff: 20ms
+    lock-max-retries: 10
+    warm-on-startup: true
+    warm-size: 1000
+    circuit-failure-threshold: 5
+    circuit-open-duration: 30s
+
+  rate-limit:
+    enabled: ${APP_RATE_LIMIT_ENABLED:true}
+    authenticated-capacity: ${APP_AUTH_CAPACITY:100}
+    authenticated-refill-per-minute: ${APP_AUTH_REFILL:100}
+    anonymous-capacity: ${APP_ANON_CAPACITY:20}
+    anonymous-refill-per-minute: ${APP_ANON_REFILL:20}
+    redirect-capacity: ${APP_REDIRECT_CAPACITY:600}
+    redirect-refill-per-minute: ${APP_REDIRECT_REFILL:600}
+    fail-open: true
+    trusted-proxies: 127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+
+  analytics:
+    enabled: ${APP_ANALYTICS_ENABLED:true}
+    stream: snip:clicks
+    consumer-group: analytics
+    batch-size: 500
+    max-stream-length: 1000000
+    reclaim-idle-after: 60s
+    geoip-database: ${APP_GEOIP_DB:}
+    geoip-demo-fallback: ${APP_GEOIP_DEMO:false}
+
+  bloom:
+    enabled: ${APP_BLOOM_ENABLED:true}
+    bits: 8388608          # 1 MB of Redis
+    hashes: 7
+
+  security:
+    ssrf-guard: ${APP_SSRF_GUARD:true}
+    reject-unresolvable-hosts: ${APP_REJECT_UNRESOLVABLE:true}
+    max-url-length: 2048
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: snip
+      instance: ${HOSTNAME:local}
+    distribution:
+      # Export histogram buckets, not pre-computed percentiles: you cannot average
+      # percentiles across instances, but you can sum buckets and then compute one.
+      percentiles-histogram:
+        http.server.requests: true
+        snip.redirect: true
+      percentiles:
+        http.server.requests: 0.5,0.95,0.99
+      slo:
+        http.server.requests: 5ms,10ms,25ms,50ms,100ms,250ms,500ms,1s
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+
+logging:
+  level:
+    dev.snip: ${APP_LOG_LEVEL:INFO}
+    org.springframework.web: WARN
+    nl.basjes: WARN
+    com.zaxxer.hikari: WARN

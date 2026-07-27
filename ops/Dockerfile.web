@@ -1,0 +1,17 @@
+# syntax=docker/dockerfile:1
+#
+# Nginx image that also carries the built SPA, so `docker compose up` produces a
+# working front end with no separate build step.
+
+FROM node:22-alpine AS frontend
+WORKDIR /build
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm install --no-audit --no-fund
+COPY frontend/ ./
+RUN npm run build
+
+FROM nginx:1.27-alpine
+# Files in /etc/nginx/templates are run through envsubst at container start and written
+# to /etc/nginx/conf.d, which is how ${SNIP_UPSTREAM} gets filled in.
+COPY ops/nginx.conf.template /etc/nginx/templates/default.conf.template
+COPY --from=frontend /build/dist /usr/share/nginx/html

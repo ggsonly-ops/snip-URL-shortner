@@ -1,0 +1,13 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    # Pinned so the provisioned dashboard can reference it by uid instead of relying on
+    # whatever random uid Grafana would otherwise generate.
+    uid: snip-prom
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      timeInterval: 5s

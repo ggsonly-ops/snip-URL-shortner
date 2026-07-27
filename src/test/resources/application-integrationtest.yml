@@ -1,0 +1,43 @@
+# Shared defaults for the Testcontainers suite.
+#
+# These live in a profile yml rather than in the base class's @DynamicPropertySource
+# because @DynamicPropertySource outranks @TestPropertySource - anything set there would
+# silently override a test class that is trying to configure the very thing it tests.
+# Profile properties sit below @TestPropertySource, so subclasses can override them.
+
+app:
+  machine-id: 1
+
+  security:
+    # The suite uses hosts that deliberately do not resolve. DNS and SSRF behaviour is
+    # asserted properly in UrlValidatorTest against a stubbed resolver, which is both
+    # faster and not dependent on the network.
+    ssrf-guard: false
+    reject-unresolvable-hosts: false
+
+  rate-limit:
+    enabled: true
+    # Generous by default so no test fails because of a limit it was not testing.
+    # RateLimitIntegrationTest overrides these with @TestPropertySource.
+    redirect-capacity: 100000
+    redirect-refill-per-minute: 100000
+    authenticated-capacity: 100000
+    authenticated-refill-per-minute: 100000
+    anonymous-capacity: 100000
+    anonymous-refill-per-minute: 100000
+
+  cache:
+    # Warming queries the whole table on startup; irrelevant here and it just slows the
+    # context up.
+    warm-on-startup: false
+
+  analytics:
+    enabled: true
+    # Tests drive the consumer directly, but a short interval keeps the awaits brief.
+    drain-interval-ms: 500
+
+logging:
+  level:
+    dev.snip: INFO
+    org.testcontainers: WARN
+    com.github.dockerjava: WARN

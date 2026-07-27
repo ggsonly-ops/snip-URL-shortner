@@ -1,0 +1,23 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+  external_labels:
+    service: snip
+
+scrape_configs:
+  - job_name: snip
+    metrics_path: /actuator/prometheus
+    static_configs:
+      # All three are listed even when only app1 is running. Prometheus simply reports
+      # the others as down, which is the honest state, and means switching between the
+      # 1-instance and 3-instance topologies needs no config change.
+      - targets: ["app1:8080", "app2:8080", "app3:8080"]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: app_instance
+        regex: "([^:]+):.*"
+        replacement: "$1"
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

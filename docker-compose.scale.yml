@@ -1,0 +1,96 @@
+# Overlay that adds two more app instances.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.scale.yml up -d --build
+#
+# Why named services instead of `docker compose up --scale app=3`:
+#
+# --scale hands every replica an identical environment, so all three would come up with
+# the same APP_MACHINE_ID and could mint colliding Snowflake ids - two nodes with the
+# same machine-id bits produce the same id for the same (millisecond, sequence). That
+# bug only appears when you actually try to scale out, which is rather the point of
+# doing it.
+#
+# The application also derives a machine id from its hostname when none is configured,
+# which recovers uniqueness under --scale, but 1024 buckets makes that probabilistic.
+# Explicit ids are the real answer; the hostname hash is the safety net.
+#
+# Named services also give Prometheus stable scrape targets, which `--scale` does not.
+#
+# (The service bodies are spelled out rather than reusing the base file's YAML anchors:
+# anchors are resolved per-file before Compose merges, so an anchor defined in
+# docker-compose.yml is not visible here.)
+
+services:
+  app2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/snip
+      SPRING_DATASOURCE_USERNAME: snip
+      SPRING_DATASOURCE_PASSWORD: snip
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost}
+      APP_CACHE_ENABLED: ${APP_CACHE_ENABLED:-true}
+      APP_RATE_LIMIT_ENABLED: ${APP_RATE_LIMIT_ENABLED:-true}
+      APP_BLOOM_ENABLED: ${APP_BLOOM_ENABLED:-true}
+      APP_ANALYTICS_ENABLED: ${APP_ANALYTICS_ENABLED:-true}
+      APP_GEOIP_DEMO: ${APP_GEOIP_DEMO:-false}
+      APP_DB_POOL_SIZE: ${APP_DB_POOL_SIZE:-20}
+      APP_REDIRECT_CAPACITY: ${APP_REDIRECT_CAPACITY:-600}
+      APP_REDIRECT_REFILL: ${APP_REDIRECT_REFILL:-600}
+      APP_AUTH_CAPACITY: ${APP_AUTH_CAPACITY:-100}
+      APP_AUTH_REFILL: ${APP_AUTH_REFILL:-100}
+      APP_ANON_CAPACITY: ${APP_ANON_CAPACITY:-20}
+      APP_ANON_REFILL: ${APP_ANON_REFILL:-20}
+      APP_MACHINE_ID: "2"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports: ["${SNIP_APP2_PORT:-8081}:8080"]
+    restart: unless-stopped
+
+  app3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/snip
+      SPRING_DATASOURCE_USERNAME: snip
+      SPRING_DATASOURCE_PASSWORD: snip
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost}
+      APP_CACHE_ENABLED: ${APP_CACHE_ENABLED:-true}
+      APP_RATE_LIMIT_ENABLED: ${APP_RATE_LIMIT_ENABLED:-true}
+      APP_BLOOM_ENABLED: ${APP_BLOOM_ENABLED:-true}
+      APP_ANALYTICS_ENABLED: ${APP_ANALYTICS_ENABLED:-true}
+      APP_GEOIP_DEMO: ${APP_GEOIP_DEMO:-false}
+      APP_DB_POOL_SIZE: ${APP_DB_POOL_SIZE:-20}
+      APP_REDIRECT_CAPACITY: ${APP_REDIRECT_CAPACITY:-600}
+      APP_REDIRECT_REFILL: ${APP_REDIRECT_REFILL:-600}
+      APP_AUTH_CAPACITY: ${APP_AUTH_CAPACITY:-100}
+      APP_AUTH_REFILL: ${APP_AUTH_REFILL:-100}
+      APP_ANON_CAPACITY: ${APP_ANON_CAPACITY:-20}
+      APP_ANON_REFILL: ${APP_ANON_REFILL:-20}
+      APP_MACHINE_ID: "3"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports: ["${SNIP_APP3_PORT:-8082}:8080"]
+    restart: unless-stopped
+
+  nginx:
+    environment:
+      SNIP_EDGE_RATE: ${SNIP_EDGE_RATE:-200r/s}
+      SNIP_EDGE_BURST: ${SNIP_EDGE_BURST:-200}
+      SNIP_UPSTREAM: |
+        server app1:8080 max_fails=3 fail_timeout=30s;
+        server app2:8080 max_fails=3 fail_timeout=30s;
+        server app3:8080 max_fails=3 fail_timeout=30s;
+    depends_on: [app1, app2, app3]
