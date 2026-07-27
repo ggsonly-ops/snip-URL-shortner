@@ -20,7 +20,7 @@ jobs:
         cache: maven
         
     - name: Build and Test Backend
-      run: mvn -B verify
+      run: mvn -B verify -Ddocker.api.version=1.41
       
     - name: Set up Node.js
       uses: actions/setup-node@v4
